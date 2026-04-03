@@ -35,6 +35,11 @@ type ProviderCatalog = {
   providers: ProviderOption[]
 }
 
+type ChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 const winningLines = [
   [0, 1, 2],
   [3, 4, 5],
@@ -84,6 +89,15 @@ function App() {
   const [selectedProvider, setSelectedProvider] = useState<'mock' | 'ollama'>('mock')
   const [ollamaModel, setOllamaModel] = useState('gemma4:e4b')
   const [streamNonce, setStreamNonce] = useState(0)
+  const [assistantTab, setAssistantTab] = useState<'reasoning' | 'chat' | 'logs'>('reasoning')
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      role: 'assistant',
+      content: 'Chat ready. Ask about the game, the camera feed, or the robotics demo setup.',
+    },
+  ])
+  const [chatDraft, setChatDraft] = useState('')
+  const [sendingChat, setSendingChat] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [requestingMove, setRequestingMove] = useState(false)
   const [logs, setLogs] = useState<string[]>([
@@ -252,6 +266,55 @@ function App() {
       appendLog(`Assistant request failed: ${message}`)
     } finally {
       setRequestingMove(false)
+    }
+  }
+
+  const handleSendChat = async () => {
+    const trimmed = chatDraft.trim()
+    if (!trimmed) {
+      return
+    }
+    if (selectedProvider === 'ollama' && !ollamaModel.trim()) {
+      setError('Choose an Ollama model tag before sending chat.')
+      appendLog('Chat request rejected because the Ollama model field is empty.')
+      return
+    }
+
+    const nextMessages = [...chatMessages, { role: 'user' as const, content: trimmed }]
+    setChatMessages(nextMessages)
+    setChatDraft('')
+    setSendingChat(true)
+    setError(null)
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          provider: selectedProvider,
+          model: selectedProvider === 'ollama' ? ollamaModel.trim() : undefined,
+          messages: nextMessages,
+        }),
+      })
+
+      const payload = (await response.json()) as { reply?: string; detail?: string; model?: string }
+      if (!response.ok || !payload.reply) {
+        throw new Error(
+          payload.detail ? payload.detail : `Chat request failed with ${response.status}`,
+        )
+      }
+
+      setChatMessages((current) => [...current, { role: 'assistant', content: payload.reply! }])
+      appendLog(`Chat reply received from ${selectedProvider}${payload.model ? `:${payload.model}` : ''}.`)
+      setAssistantTab('chat')
+    } catch (requestError) {
+      const message = (requestError as Error).message
+      setError(message)
+      appendLog(`Chat request failed: ${message}`)
+    } finally {
+      setSendingChat(false)
     }
   }
 
@@ -453,29 +516,89 @@ function App() {
           </div>
         </div>
 
-        <div className="assistant-grid">
-          <article className="assistant-card">
-            <h3>Observed Board</h3>
-            <pre className="mono-panel">{formatBoard(board)}</pre>
-          </article>
+        <div className="assistant-tabs">
+          <button
+            type="button"
+            className={`tab-button ${assistantTab === 'reasoning' ? 'tab-active' : ''}`.trim()}
+            onClick={() => setAssistantTab('reasoning')}
+          >
+            Reasoning
+          </button>
+          <button
+            type="button"
+            className={`tab-button ${assistantTab === 'chat' ? 'tab-active' : ''}`.trim()}
+            onClick={() => setAssistantTab('chat')}
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            className={`tab-button ${assistantTab === 'logs' ? 'tab-active' : ''}`.trim()}
+            onClick={() => setAssistantTab('logs')}
+          >
+            Logs
+          </button>
+        </div>
 
-          <article className="assistant-card">
-            <h3>Chosen Move</h3>
-            <div className="move-card">
-              <span className="move-index">{assistant?.chosen_move ?? '-'}</span>
-              <p>{assistant?.explanation ?? 'No assistant move requested yet.'}</p>
-              <small>Confidence {assistant ? assistant.confidence.toFixed(2) : '--'}</small>
+        {assistantTab === 'reasoning' ? (
+          <div className="assistant-grid">
+            <article className="assistant-card">
+              <h3>Observed Board</h3>
+              <pre className="mono-panel">{formatBoard(board)}</pre>
+            </article>
+
+            <article className="assistant-card">
+              <h3>Chosen Move</h3>
+              <div className="move-card">
+                <span className="move-index">{assistant?.chosen_move ?? '-'}</span>
+                <p>{assistant?.explanation ?? 'No assistant move requested yet.'}</p>
+                <small>Confidence {assistant ? assistant.confidence.toFixed(2) : '--'}</small>
+              </div>
+            </article>
+
+            <article className="assistant-card transcript-card">
+              <h3>Reasoning Transcript</h3>
+              <pre className="mono-panel transcript-panel">
+                {assistant?.reasoning_transcript ??
+                  'No reasoning transcript yet.\n\nPlace X on the board, then request the assistant move.'}
+              </pre>
+            </article>
+          </div>
+        ) : null}
+
+        {assistantTab === 'chat' ? (
+          <div className="chat-panel">
+            <div className="chat-thread">
+              {chatMessages.map((message, index) => (
+                <article
+                  key={`${message.role}-${index}`}
+                  className={`chat-bubble ${message.role === 'assistant' ? 'chat-assistant' : 'chat-user'}`.trim()}
+                >
+                  <span className="status-label">{message.role}</span>
+                  <p>{message.content}</p>
+                </article>
+              ))}
             </div>
-          </article>
+            <div className="chat-composer">
+              <textarea
+                value={chatDraft}
+                onChange={(event) => setChatDraft(event.target.value)}
+                placeholder="Ask the assistant about the board, the camera, or the demo setup."
+                rows={4}
+              />
+              <div className="chat-actions">
+                <button type="button" onClick={() => setChatMessages([{ role: 'assistant', content: 'Chat reset. Ask a new question.' }])}>
+                  Clear Chat
+                </button>
+                <button type="button" onClick={handleSendChat} disabled={sendingChat}>
+                  {sendingChat ? 'Sending...' : 'Send Chat'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
-          <article className="assistant-card transcript-card">
-            <h3>Reasoning Transcript</h3>
-            <pre className="mono-panel transcript-panel">
-              {assistant?.reasoning_transcript ??
-                'No reasoning transcript yet.\n\nPlace X on the board, then request the assistant move.'}
-            </pre>
-          </article>
-
+        {assistantTab === 'logs' ? (
           <article className="assistant-card">
             <h3>Event Log</h3>
             <ul className="log-list">
@@ -484,7 +607,7 @@ function App() {
               ))}
             </ul>
           </article>
-        </div>
+        ) : null}
 
         {error ? <p className="error-banner">{error}</p> : null}
       </section>

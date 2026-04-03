@@ -81,6 +81,7 @@ The current implementation now has a real split stack:
 - portrait-oriented board and assistant layout
 - synthetic or live camera preview served by the backend
 - assistant endpoint supporting both `mock` and `ollama` providers
+- separate chat endpoint supporting both `mock` and `ollama` providers
 
 The original static prototype is still present as a fallback reference:
 
@@ -115,6 +116,7 @@ http://127.0.0.1:5173
 - `/api/providers`
 - `/api/vision/status`
 - `/api/assistant/move`
+- `/api/chat`
 - `/vision/stream`
 
 ## Ollama Notes

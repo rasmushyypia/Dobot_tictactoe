@@ -76,6 +76,23 @@ class ProviderCatalog(BaseModel):
     providers: list[ProviderOption]
 
 
+class ChatMessage(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    provider: Literal["mock", "ollama"] = "mock"
+    model: str | None = None
+    messages: list[ChatMessage] = Field(default_factory=list)
+
+
+class ChatResponse(BaseModel):
+    provider: str
+    model: str
+    reply: str
+
+
 class CameraService:
     def __init__(self, camera_index: int = 0, width: int = 960, height: int = 720) -> None:
         self.camera_index = camera_index
@@ -350,6 +367,57 @@ def build_ollama_response(request: MoveRequest, moves: list[int]) -> AssistantRe
     return AssistantResponse(provider=request.provider, model=model_name, current_player=request.player, legal_moves=moves, chosen_move=chosen_move, reasoning_transcript=reasoning_transcript, explanation=explanation, confidence=clamp_confidence(parsed.get("confidence"), default=0.5))
 
 
+def build_mock_chat_response(request: ChatRequest) -> ChatResponse:
+    latest_user = next((message.content for message in reversed(request.messages) if message.role == "user"), "")
+    reply = (
+        "Mock chat mode is active. "
+        "The real chat path is ready, but this response is coming from the deterministic fallback.\n\n"
+        f"Latest user message: {latest_user}\n\n"
+        "Try switching the provider to Ollama if you want the same GUI to behave like a real local assistant."
+    )
+    return ChatResponse(provider=request.provider, model="mock-chat-v1", reply=reply)
+
+
+def build_ollama_chat_response(request: ChatRequest) -> ChatResponse:
+    model_name = request.model or DEFAULT_OLLAMA_MODEL
+    prompt_parts = [
+        "You are a robotics lab assistant inside a tic-tac-toe demo interface.",
+        "Keep answers concise, technical, and directly useful.",
+        "Do not output JSON for chat. Respond naturally.",
+        "",
+        "Conversation:",
+    ]
+    for message in request.messages:
+        prompt_parts.append(f"{message.role.upper()}: {message.content}")
+    prompt_parts.append("ASSISTANT:")
+    prompt = "\n".join(prompt_parts)
+
+    try:
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": model_name,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.4},
+            },
+            timeout=(3.0, 90.0),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Ollama chat request failed: {exc}") from exc
+
+    if payload.get("error"):
+        raise HTTPException(status_code=502, detail=f"Ollama error: {payload['error']}")
+
+    reply = str(payload.get("response", "")).strip()
+    if not reply:
+        raise HTTPException(status_code=502, detail="Ollama returned an empty chat response.")
+
+    return ChatResponse(provider=request.provider, model=model_name, reply=reply)
+
+
 camera_service = CameraService(camera_index=int(os.getenv("WEB_TTT_CAMERA_INDEX", "0")))
 
 
@@ -401,6 +469,13 @@ def assistant_move(request: MoveRequest) -> AssistantResponse:
     if request.provider == "mock":
         return build_mock_response(request, moves)
     return build_ollama_response(request, moves)
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat(request: ChatRequest) -> ChatResponse:
+    if request.provider == "mock":
+        return build_mock_chat_response(request)
+    return build_ollama_chat_response(request)
 
 
 def mjpeg_stream(source: Literal["auto", "synthetic", "camera"]):
