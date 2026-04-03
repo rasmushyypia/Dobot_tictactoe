@@ -1,0 +1,70 @@
+:root {
+  --ink: #1f2521;
+  --muted: #667068;
+  --line: rgba(40, 35, 27, 0.12);
+  --x-mark: #c24931;
+  --o-mark: #286f78;
+  --mono: Consolas, 'Courier New', monospace;
+  font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(204, 100, 46, 0.16), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(40, 111, 120, 0.14), transparent 30%),
+    linear-gradient(180deg, #f7f0e5 0%, #ece2d3 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 1rem;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, #ca6036, #8e3d21);
+  color: #fff8ef;
+  box-shadow: 0 10px 20px rgba(131, 58, 28, 0.22);
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.62;
+  transform: none;
+}
+
+#root {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+}
