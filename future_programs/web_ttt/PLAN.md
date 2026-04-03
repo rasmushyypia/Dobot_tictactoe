@@ -46,23 +46,7 @@ Reason:
 - Best fit for a portrait monitor
 - Easier than synchronizing multiple windows
 
-### Option B: Separate Windows Stacked on the Monitor
 
-Layout:
-
-- one game window
-- one chat or explanation window
-
-Reason to choose it:
-
-- if the board display must stay visually independent
-- if the chatbot should be reusable outside tic-tac-toe
-
-Why not first:
-
-- more coordination overhead
-- harder state synchronization
-- less clean for an MVP
 
 ## LLM Output Contract
 

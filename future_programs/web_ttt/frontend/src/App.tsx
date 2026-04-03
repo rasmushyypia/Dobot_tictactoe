@@ -22,6 +22,19 @@ type VisionStatus = {
   note: string
 }
 
+type ProviderOption = {
+  id: 'mock' | 'ollama'
+  label: string
+  available: boolean
+  default_model: string | null
+  note: string
+}
+
+type ProviderCatalog = {
+  default_provider: 'mock' | 'ollama'
+  providers: ProviderOption[]
+}
+
 const winningLines = [
   [0, 1, 2],
   [3, 4, 5],
@@ -55,12 +68,22 @@ function formatBoard(board: Cell[]) {
   ).join('\n')
 }
 
+function nextPlayer(board: Cell[]): Player {
+  const xCount = board.filter((cell) => cell === 'X').length
+  const oCount = board.filter((cell) => cell === 'O').length
+  return xCount === oCount ? 'X' : 'O'
+}
+
 function App() {
   const [board, setBoard] = useState<Cell[]>(Array(9).fill(''))
   const [currentPlayer, setCurrentPlayer] = useState<Player>('X')
   const [winner, setWinner] = useState<Player | null>(null)
   const [assistant, setAssistant] = useState<AssistantResponse | null>(null)
   const [vision, setVision] = useState<VisionStatus | null>(null)
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalog | null>(null)
+  const [selectedProvider, setSelectedProvider] = useState<'mock' | 'ollama'>('mock')
+  const [ollamaModel, setOllamaModel] = useState('gemma4:e4b')
+  const [streamNonce, setStreamNonce] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [requestingMove, setRequestingMove] = useState(false)
   const [logs, setLogs] = useState<string[]>([
@@ -97,8 +120,44 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadProviders = async () => {
+      try {
+        const response = await fetch('/api/providers')
+        if (!response.ok) {
+          throw new Error(`Provider catalog failed with ${response.status}`)
+        }
+        const data = (await response.json()) as ProviderCatalog
+        if (!cancelled) {
+          setProviderCatalog(data)
+          setSelectedProvider(data.default_provider)
+          const ollama = data.providers.find((provider) => provider.id === 'ollama')
+          if (ollama?.default_model) {
+            setOllamaModel(ollama.default_model)
+          }
+        }
+      } catch (fetchError) {
+        if (!cancelled) {
+          setError((fetchError as Error).message)
+        }
+      }
+    }
+
+    loadProviders()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const appendLog = (message: string) => {
     setLogs((current) => [`${new Date().toLocaleTimeString()}  ${message}`, ...current].slice(0, 8))
+  }
+
+  const refreshCameraStream = () => {
+    setStreamNonce((value) => value + 1)
   }
 
   const resetGame = () => {
@@ -118,7 +177,7 @@ function App() {
       setCurrentPlayer(nextWinner)
       return
     }
-    setCurrentPlayer(legalMoves(nextBoard).length === 0 ? 'X' : nextBoard.filter((cell) => cell === 'X').length === nextBoard.filter((cell) => cell === 'O').length ? 'X' : 'O')
+    setCurrentPlayer(legalMoves(nextBoard).length === 0 ? 'X' : nextPlayer(nextBoard))
   }
 
   const handleCellClick = (index: number) => {
@@ -145,6 +204,11 @@ function App() {
       appendLog('Assistant move rejected because the GUI still expects X.')
       return
     }
+    if (selectedProvider === 'ollama' && !ollamaModel.trim()) {
+      setError('Choose an Ollama model tag before requesting a move.')
+      appendLog('Assistant move rejected because the Ollama model field is empty.')
+      return
+    }
 
     setRequestingMove(true)
     setError(null)
@@ -158,13 +222,18 @@ function App() {
         body: JSON.stringify({
           board,
           player: currentPlayer,
-          provider: 'mock',
+          provider: selectedProvider,
+          model: selectedProvider === 'ollama' ? ollamaModel.trim() : undefined,
         }),
       })
 
       const payload = (await response.json()) as AssistantResponse | { detail?: string }
       if (!response.ok) {
-        throw new Error('detail' in payload && payload.detail ? payload.detail : `Assistant request failed with ${response.status}`)
+        throw new Error(
+          'detail' in payload && payload.detail
+            ? payload.detail
+            : `Assistant request failed with ${response.status}`,
+        )
       }
 
       const data = payload as AssistantResponse
@@ -176,7 +245,7 @@ function App() {
       nextBoard[data.chosen_move] = 'O'
       applyBoardState(nextBoard)
       setAssistant(data)
-      appendLog(`Assistant selected cell ${data.chosen_move} using ${data.model}.`)
+      appendLog(`Assistant selected cell ${data.chosen_move} using ${data.provider}:${data.model}.`)
     } catch (requestError) {
       const message = (requestError as Error).message
       setError(message)
@@ -186,12 +255,46 @@ function App() {
     }
   }
 
+  const updateCameraIndex = async (cameraIndex: number) => {
+    if (cameraIndex < 0) {
+      return
+    }
+
+    try {
+      const response = await fetch('/api/vision/config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ camera_index: cameraIndex }),
+      })
+      const payload = (await response.json()) as VisionStatus | { detail?: string }
+      if (!response.ok) {
+        throw new Error(
+          'detail' in payload && payload.detail
+            ? payload.detail
+            : `Camera update failed with ${response.status}`,
+        )
+      }
+
+      setVision(payload as VisionStatus)
+      refreshCameraStream()
+      appendLog(`Switched camera index to ${cameraIndex}.`)
+      setError(null)
+    } catch (requestError) {
+      const message = (requestError as Error).message
+      setError(message)
+      appendLog(`Camera switch failed: ${message}`)
+    }
+  }
+
   const boardFull = legalMoves(board).length === 0
   const statusText = winner
     ? `Winner: ${winner}`
     : boardFull
       ? 'Draw'
       : `Turn: ${currentPlayer}`
+  const ollamaOption = providerCatalog?.providers.find((provider) => provider.id === 'ollama')
 
   return (
     <main className="app-shell">
@@ -203,9 +306,7 @@ function App() {
         <div className="hero-pills">
           <span className="pill">{statusText}</span>
           <span className="pill">Source: GUI board</span>
-          <span className="pill">
-            Camera: {vision?.active_source === 'camera' ? 'live' : 'synthetic'}
-          </span>
+          <span className="pill">Camera: {vision?.active_source === 'camera' ? 'live' : 'synthetic'}</span>
         </div>
       </section>
 
@@ -264,7 +365,7 @@ function App() {
           </div>
 
           <div className="camera-frame">
-            <img src="/vision/stream?source=auto" alt="Observed input stream" />
+            <img src={`/vision/stream?source=auto&v=${streamNonce}`} alt="Observed input stream" />
             <div className="camera-overlay">
               <span>Preview only</span>
               <span>{vision?.note ?? 'Waiting for backend vision status.'}</span>
@@ -275,6 +376,18 @@ function App() {
             <div className="status-card">
               <span className="status-label">Current source</span>
               <strong>{vision?.active_source ?? 'unknown'}</strong>
+            </div>
+            <div className="status-card camera-switch-card">
+              <span className="status-label">Camera index</span>
+              <div className="camera-switch-controls">
+                <button type="button" onClick={() => updateCameraIndex((vision?.camera_index ?? 0) - 1)}>
+                  -
+                </button>
+                <strong>{vision?.camera_index ?? 0}</strong>
+                <button type="button" onClick={() => updateCameraIndex((vision?.camera_index ?? 0) + 1)}>
+                  +
+                </button>
+              </div>
             </div>
             <div className="status-card">
               <span className="status-label">Later role</span>
@@ -290,9 +403,53 @@ function App() {
             <p className="panel-kicker">Assistant</p>
             <h2>Structured Move + Demo Transcript</h2>
           </div>
-          <div className="status-card compact-card">
-            <span className="status-label">Provider</span>
-            <strong>{assistant?.provider ?? 'mock'}</strong>
+          <div className="provider-controls">
+            <label className="provider-field">
+              <span className="status-label">Provider</span>
+              <select
+                value={selectedProvider}
+                onChange={(event) => setSelectedProvider(event.target.value as 'mock' | 'ollama')}
+              >
+                {(providerCatalog?.providers ?? []).map((provider) => (
+                  <option
+                    key={provider.id}
+                    value={provider.id}
+                    disabled={!provider.available && provider.id !== 'mock'}
+                  >
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="provider-field">
+              <span className="status-label">Ollama Model</span>
+              <input
+                type="text"
+                value={ollamaModel}
+                onChange={(event) => setOllamaModel(event.target.value)}
+                disabled={selectedProvider !== 'ollama'}
+                placeholder="gemma4:e4b"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="status-strip">
+          <div className="status-card">
+            <span className="status-label">Selected provider</span>
+            <strong>{selectedProvider}</strong>
+          </div>
+          <div className="status-card">
+            <span className="status-label">Model</span>
+            <strong>{assistant?.model ?? (selectedProvider === 'ollama' ? ollamaModel : 'mock-strategist-v1')}</strong>
+          </div>
+          <div className="status-card provider-note">
+            <span className="status-label">Provider note</span>
+            <strong>
+              {selectedProvider === 'ollama'
+                ? ollamaOption?.note ?? 'Ollama provider status unavailable.'
+                : 'Mock provider is always available for UI testing.'}
+            </strong>
           </div>
         </div>
 
@@ -305,13 +462,9 @@ function App() {
           <article className="assistant-card">
             <h3>Chosen Move</h3>
             <div className="move-card">
-              <span className="move-index">
-                {assistant?.chosen_move ?? '-'}
-              </span>
+              <span className="move-index">{assistant?.chosen_move ?? '-'}</span>
               <p>{assistant?.explanation ?? 'No assistant move requested yet.'}</p>
-              <small>
-                Confidence {assistant ? assistant.confidence.toFixed(2) : '--'}
-              </small>
+              <small>Confidence {assistant ? assistant.confidence.toFixed(2) : '--'}</small>
             </div>
           </article>
 

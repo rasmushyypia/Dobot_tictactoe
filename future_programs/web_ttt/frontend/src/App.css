@@ -46,8 +46,31 @@
   padding: 0.72rem 0.9rem;
 }
 
-.compact-card {
-  padding: 0.6rem 0.85rem;
+.provider-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.provider-field {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 12rem;
+}
+
+.provider-field select,
+.provider-field input {
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  padding: 0.72rem 0.85rem;
+  background: rgba(255, 251, 244, 0.95);
+  color: var(--ink);
+  font: inherit;
+}
+
+.provider-field input:disabled,
+.provider-field select:disabled {
+  opacity: 0.65;
 }
 
 .top-zone {
@@ -191,6 +214,26 @@
   color: #fff6eb;
   font-size: 2rem;
   font-weight: 800;
+}
+
+.provider-note {
+  flex: 1 1 20rem;
+}
+
+.camera-switch-card {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.camera-switch-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.camera-switch-controls button {
+  min-width: 2.3rem;
+  padding: 0.45rem 0.75rem;
 }
 
 .log-list {

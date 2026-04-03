@@ -80,7 +80,7 @@ The current implementation now has a real split stack:
 - `frontend/`: React + Vite frontend
 - portrait-oriented board and assistant layout
 - synthetic or live camera preview served by the backend
-- mock assistant endpoint returning visible reasoning plus a structured move
+- assistant endpoint supporting both `mock` and `ollama` providers
 
 The original static prototype is still present as a fallback reference:
 
@@ -112,12 +112,30 @@ http://127.0.0.1:5173
 ## Current Backend Endpoints
 
 - `/api/health`
+- `/api/providers`
 - `/api/vision/status`
 - `/api/assistant/move`
 - `/vision/stream`
+
+## Ollama Notes
+
+- The frontend can now request moves through the `ollama` provider.
+- Default configuration:
+  - URL: `http://127.0.0.1:11434`
+  - model: `gemma4:e4b`
+- Override with environment variables before starting the backend:
+
+```powershell
+$env:WEB_TTT_OLLAMA_URL='http://127.0.0.1:11434'
+$env:WEB_TTT_OLLAMA_MODEL='gemma4:e4b'
+python main.py
+```
+
+- If Ollama is not reachable, the UI still works with the `mock` provider.
 
 ## Camera Notes
 
 - If OpenCV can open a camera, the GUI will show a live preview.
 - If no camera is available, the backend serves a synthetic fallback stream so the layout still works.
 - The current move logic still uses the GUI board state, not camera perception.
+- The GUI can now switch camera index dynamically if Windows maps the phone camera to index `0` and the webcam to another index such as `1`.
