@@ -65,7 +65,7 @@ type ChatMessage = {
   content: string
 }
 
-const modelOptions = ['gemma4:e4b', 'gemma4:26b', 'qwen3.5:9b']
+const modelOptions = ['gemma4:e4b', 'gemma4:26b', 'qwen3.5:9b', 'gemini-3-flash-preview:cloud']
 
 const winningLines = [
   [0, 1, 2],
@@ -799,7 +799,7 @@ function App() {
                 <pre className="mono-panel compact-panel">
                   {assistantSourceBoard
                     ? formatBoard(assistantSourceBoard)
-                    : 'No analysis request yet.\n\nSet up the board, then run analysis to capture the observed source board.'}
+                    : 'No analysis request yet.'}
                 </pre>
               </article>
 
@@ -808,7 +808,7 @@ function App() {
                 <pre className="mono-panel compact-panel">
                   {assistant?.interpreted_board
                     ? formatBoard(assistant.interpreted_board)
-                    : 'No interpreted board yet.\n\nRun analysis to see how the selected provider reads the position.'}
+                    : 'No interpreted board yet.'}
                 </pre>
               </article>
 
@@ -831,30 +831,30 @@ function App() {
               </article>
             </div>
 
-            <article className="assistant-card transcript-card">
-              <h3>Observation Reasoning</h3>
-              <small className="status-label">
-                Model: {assistant?.observation_model ?? (selectedProvider === 'ollama' ? stage1Model : 'mock-strategist-v1')}
-              </small>
-              <pre className="mono-panel transcript-panel">
-                {assistant?.observation_reasoning_transcript ??
-                  assistant?.reasoning_transcript ??
-                  'No observation transcript yet.\n\nRun analysis or a full assistant move to inspect how the model interpreted the board.'}
-              </pre>
-            </article>
+            <div className="transcript-row">
+              <article className="assistant-card transcript-card">
+                <h3>Observation Reasoning</h3>
+                <small className="status-label">
+                  Model: {assistant?.observation_model ?? (selectedProvider === 'ollama' ? stage1Model : 'mock-strategist-v1')}
+                </small>
+                <pre className="mono-panel transcript-panel">
+                  {assistant?.observation_reasoning_transcript ??
+                    assistant?.reasoning_transcript ??
+                    'No observation reasoning yet.'}
+                </pre>
+              </article>
 
-            <article className="assistant-card transcript-card">
-              <h3>Move Reasoning</h3>
-              <small className="status-label">
-                Model: {assistant?.move_model ?? (selectedProvider === 'ollama' ? stage2Model : 'mock-strategist-v1')}
-              </small>
-              <pre className="mono-panel transcript-panel">
-                {assistant?.move_reasoning_transcript ??
-                  (assistant?.chosen_move != null
-                    ? assistant.reasoning_transcript
-                    : 'No move reasoning yet.\n\nRun Assistant Move to see the second-stage move transcript.')}
-              </pre>
-            </article>
+              <article className="assistant-card transcript-card">
+                <h3>Move Reasoning</h3>
+                <small className="status-label">
+                  Model: {assistant?.move_model ?? (selectedProvider === 'ollama' ? stage2Model : 'mock-strategist-v1')}
+                </small>
+                <pre className="mono-panel transcript-panel">
+                  {assistant?.move_reasoning_transcript ??
+                    (assistant?.chosen_move != null ? assistant.reasoning_transcript : 'No move reasoning yet.')}
+                </pre>
+              </article>
+            </div>
 
             <article className="assistant-card transcript-card">
               <h3>Observation Prompt</h3>

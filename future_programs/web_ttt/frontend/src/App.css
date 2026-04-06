@@ -79,7 +79,7 @@
 
 .provider-controls {
   display: grid;
-  grid-template-columns: minmax(10rem, 0.9fr) minmax(12rem, 1fr) minmax(12rem, 1fr) minmax(11rem, 0.95fr);
+  grid-template-columns: minmax(9rem, 0.8fr) minmax(11rem, 1fr) minmax(11rem, 1fr) minmax(10rem, 0.95fr);
   gap: 0.8rem;
 }
 
@@ -390,6 +390,12 @@
   margin-top: 0.2rem;
 }
 
+.transcript-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem;
+}
+
 .mono-panel {
   margin: 0;
   border-radius: 1.1rem;
@@ -619,6 +625,10 @@
   }
 
   .reasoning-top-row {
+    grid-template-columns: 1fr;
+  }
+
+  .transcript-row {
     grid-template-columns: 1fr;
   }
 

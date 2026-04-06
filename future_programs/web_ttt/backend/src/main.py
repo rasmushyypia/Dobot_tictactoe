@@ -461,9 +461,6 @@ def extract_model_text(payload: dict[str, object]) -> str:
     response_text = str(payload.get("response", "") or "").strip()
     if response_text:
         return response_text
-    thinking_text = str(payload.get("thinking", "") or "").strip()
-    if thinking_text:
-        return thinking_text
     raise ValueError("Model returned an empty response.")
 
 
