@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 Player = Literal["X", "O"]
 Cell = Literal["", "X", "O"]
-ObservationMode = Literal["direct_state", "rendered_image", "camera_frame"]
+ObservationMode = Literal["direct_state", "camera_frame"]
 
 OLLAMA_URL = os.getenv("WEB_TTT_OLLAMA_URL", "http://127.0.0.1:11434")
 DEFAULT_OLLAMA_MODEL = os.getenv("WEB_TTT_OLLAMA_MODEL", "gemma4:e4b")
@@ -34,10 +34,6 @@ DEFAULT_ANALYSIS_PROMPT_FILE = PROJECT_ROOT / "debug_images" / "test_prompts" / 
 ANALYSIS_PROMPT_FILE = Path(os.getenv("WEB_TTT_ANALYSIS_PROMPT_FILE", str(DEFAULT_ANALYSIS_PROMPT_FILE)))
 DEFAULT_MOVE_PROMPT_FILE = PROJECT_ROOT / "debug_images" / "test_prompts" / "move_reasoning_v1.txt"
 MOVE_PROMPT_FILE = Path(os.getenv("WEB_TTT_MOVE_PROMPT_FILE", str(DEFAULT_MOVE_PROMPT_FILE)))
-
-
-def uses_image_observation(mode: ObservationMode, board_image_base64: str | None) -> bool:
-    return mode == "rendered_image" and bool(board_image_base64)
 
 WINNING_LINES = (
     (0, 1, 2),
@@ -61,7 +57,6 @@ class MoveRequest(BaseModel):
     stage1_prompt_override: str | None = None
     stage2_prompt_override: str | None = None
     observation_mode: ObservationMode = "direct_state"
-    board_image_base64: str | None = None
     analysis_only: bool = False
 
 
@@ -338,8 +333,6 @@ def build_analysis_prompt_from_template(
 
     if request.observation_mode == "camera_frame" and image_payload:
         prompt += "\nInput source: live camera frame."
-    elif uses_image_observation(request.observation_mode, request.board_image_base64):
-        prompt += "\nInput source: rendered GUI board image."
     else:
         prompt += "\nInput source: direct GUI board state."
         prompt += f"\nRaw board list: {request.board}"
@@ -490,7 +483,7 @@ def save_debug_image(image_payload: str | None, observation_mode: ObservationMod
     image_bytes = base64.b64decode(image_payload)
     records_dir = get_debug_records_dir()
     records_dir.mkdir(parents=True, exist_ok=True)
-    extension = ".jpg" if observation_mode == "camera_frame" else ".png"
+    extension = ".jpg"
     filename = f"{run_id}{extension}"
     path = records_dir / filename
     with path.open("wb") as handle:
@@ -627,11 +620,7 @@ def build_mock_response(request: MoveRequest, moves: list[int]) -> AssistantResp
             (
                 "Observed input: live camera frame"
                 if request.observation_mode == "camera_frame"
-                else (
-                "Observed input: board image"
-                if uses_image_observation(request.observation_mode, request.board_image_base64)
                 else f"Observed board:\n{format_board_for_prompt(request.board)}"
-                )
             ),
             f"Current player: {request.player}",
             f"Legal moves: {moves}",
@@ -667,7 +656,7 @@ def build_ollama_response(request: MoveRequest, moves: list[int]) -> AssistantRe
     observation_model_name = request.stage1_model or request.model or DEFAULT_OLLAMA_MODEL
     move_model_name = request.stage2_model or request.model or observation_model_name
     run_id = make_debug_run_id(request.observation_mode, request.analysis_only)
-    image_payload = request.board_image_base64
+    image_payload = None
     if request.observation_mode == "camera_frame":
         try:
             image_payload = camera_service.capture_model_frame_base64()
@@ -752,17 +741,6 @@ def build_ollama_response(request: MoveRequest, moves: list[int]) -> AssistantRe
                         "Return interpreted_board as an array of 9 strings using '', 'X', or 'O'.",
                     )
                 )
-            elif uses_image_observation(request.observation_mode, request.board_image_base64):
-                prompt_parts.extend(
-                    (
-                        "",
-                        "--- VISION TASK (GUI IMAGE) ---",
-                        "Look at the attached rendered board image.",
-                        "Map the marks (Red X, Blue O, or empty) to the 0-8 spatial map provided above.",
-                        f"Legal moves are: {moves}",
-                        "Return interpreted_board as an array of 9 strings using '', 'X', or 'O'.",
-                    )
-                )
             else:
                 prompt_parts.extend(
                     (
@@ -797,7 +775,7 @@ def build_ollama_response(request: MoveRequest, moves: list[int]) -> AssistantRe
                 "prompt": prompt,
                 "stream": False,
                 "format": schema,
-                "images": [image_payload] if include_image and image_payload and request.observation_mode in ("rendered_image", "camera_frame") else [],
+                "images": [image_payload] if include_image and image_payload and request.observation_mode == "camera_frame" else [],
                 "options": {"temperature": 0.0},
             },
             timeout=(3.0, 90.0),

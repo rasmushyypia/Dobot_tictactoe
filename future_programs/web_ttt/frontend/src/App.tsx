@@ -57,7 +57,7 @@ type PromptConfig = {
   stage2_prompt_file: string | null
 }
 
-type ObservationMode = 'direct_state' | 'rendered_image' | 'camera_frame'
+type ObservationMode = 'direct_state' | 'camera_frame'
 type GameMode = 'human_vs_human' | 'human_vs_assistant'
 
 type ChatMessage = {
@@ -101,9 +101,6 @@ function formatBoard(board: Cell[]) {
 }
 
 function observationModeLabel(mode: ObservationMode) {
-  if (mode === 'rendered_image') {
-    return 'Synthetic board image'
-  }
   if (mode === 'camera_frame') {
     return 'Live camera frame'
   }
@@ -127,64 +124,6 @@ function nextPlayer(board: Cell[]): Player {
   const xCount = board.filter((cell) => cell === 'X').length
   const oCount = board.filter((cell) => cell === 'O').length
   return xCount === oCount ? 'X' : 'O'
-}
-
-function createBoardSnapshot(board: Cell[]): string {
-  const canvas = document.createElement('canvas')
-  const size = 720
-  const padding = 36
-  const gap = 18
-  const cellSize = (size - padding * 2 - gap * 2) / 3
-  canvas.width = size
-  canvas.height = size
-
-  const context = canvas.getContext('2d')
-  if (!context) {
-    throw new Error('Could not create board snapshot canvas.')
-  }
-
-  const gradient = context.createLinearGradient(0, 0, size, size)
-  gradient.addColorStop(0, '#f8f2e8')
-  gradient.addColorStop(1, '#e7dcc8')
-  context.fillStyle = gradient
-  context.fillRect(0, 0, size, size)
-
-  board.forEach((cell, index) => {
-    const row = Math.floor(index / 3)
-    const col = index % 3
-    const x = padding + col * (cellSize + gap)
-    const y = padding + row * (cellSize + gap)
-
-    context.fillStyle = '#fbf7ef'
-    context.strokeStyle = 'rgba(138, 116, 83, 0.16)'
-    context.lineWidth = 4
-    context.beginPath()
-    context.roundRect(x, y, cellSize, cellSize, 28)
-    context.fill()
-    context.stroke()
-
-    if (cell === 'X') {
-      context.strokeStyle = '#c84c35'
-      context.lineWidth = 16
-      context.lineCap = 'round'
-      context.beginPath()
-      context.moveTo(x + 46, y + 46)
-      context.lineTo(x + cellSize - 46, y + cellSize - 46)
-      context.moveTo(x + cellSize - 46, y + 46)
-      context.lineTo(x + 46, y + cellSize - 46)
-      context.stroke()
-    }
-
-    if (cell === 'O') {
-      context.strokeStyle = '#2d7077'
-      context.lineWidth = 16
-      context.beginPath()
-      context.arc(x + cellSize / 2, y + cellSize / 2, cellSize / 2 - 44, 0, Math.PI * 2)
-      context.stroke()
-    }
-  })
-
-  return canvas.toDataURL('image/png').split(',')[1]
 }
 
 function App() {
@@ -377,10 +316,6 @@ function App() {
     try {
       const sourceBoard = board.slice()
       setAssistantSourceBoard(sourceBoard)
-      let boardImageBase64: string | undefined
-      if (observationMode === 'rendered_image') {
-        boardImageBase64 = createBoardSnapshot(sourceBoard)
-      }
       const response = await fetch('/api/assistant/move', {
         method: 'POST',
         headers: {
@@ -395,7 +330,6 @@ function App() {
           stage1_prompt_override: selectedProvider === 'ollama' ? stage1PromptDraft : undefined,
           stage2_prompt_override: selectedProvider === 'ollama' ? stage2PromptDraft : undefined,
           observation_mode: observationMode,
-          board_image_base64: boardImageBase64,
           analysis_only: analysisOnly,
         }),
       })
@@ -700,7 +634,7 @@ function App() {
                   </option>
                 ))}
               </select>
-              <small className="field-note">Move model for legal O-move reasoning. Chat also uses this model.</small>
+              <small className="field-note">Model used for move reasoning. Chat uses this model.</small>
             </label>
             <label className="provider-field">
               <span className="status-label">Observation Mode</span>
@@ -709,63 +643,11 @@ function App() {
                 onChange={(event) => setObservationMode(event.target.value as ObservationMode)}
               >
                 <option value="direct_state">Direct State</option>
-                <option value="rendered_image">Synthetic Board Image</option>
                 <option value="camera_frame">Live Camera Frame</option>
               </select>
             </label>
           </div>
         </div>
-
-        <details className="prompt-editor">
-          <summary>Prompt Overrides</summary>
-          <div className="prompt-editor-grid">
-            <article className="prompt-editor-card">
-              <div className="prompt-editor-header">
-                <div>
-                  <span className="status-label">Stage 1 Prompt</span>
-                  <strong>Observation Prompt Override</strong>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setStage1PromptDraft(promptConfig?.stage1_prompt ?? '')}
-                >
-                  Reset
-                </button>
-              </div>
-              <small className="field-note">
-                Current file: {promptConfig?.stage1_prompt_file ?? 'n/a'}
-              </small>
-              <textarea
-                value={stage1PromptDraft}
-                onChange={(event) => setStage1PromptDraft(event.target.value)}
-                spellCheck={false}
-              />
-            </article>
-
-            <article className="prompt-editor-card">
-              <div className="prompt-editor-header">
-                <div>
-                  <span className="status-label">Stage 2 Prompt</span>
-                  <strong>Move Prompt Override</strong>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setStage2PromptDraft(promptConfig?.stage2_prompt ?? '')}
-                >
-                  Reset
-                </button>
-              </div>
-              <small className="field-note">
-                Current file: {promptConfig?.stage2_prompt_file ?? 'n/a'}
-              </small>
-              <textarea
-                value={stage2PromptDraft}
-                onChange={(event) => setStage2PromptDraft(event.target.value)}
-                spellCheck={false}
-              />
-            </article>
-          </div>
-        </details>
 
         <div className="assistant-tabs">
           <button
@@ -834,7 +716,7 @@ function App() {
             <div className="transcript-row">
               <article className="assistant-card transcript-card">
                 <h3>Observation Reasoning</h3>
-                <small className="status-label">
+                <small className="status-label transcript-model-label">
                   Model: {assistant?.observation_model ?? (selectedProvider === 'ollama' ? stage1Model : 'mock-strategist-v1')}
                 </small>
                 <pre className="mono-panel transcript-panel">
@@ -846,7 +728,7 @@ function App() {
 
               <article className="assistant-card transcript-card">
                 <h3>Move Reasoning</h3>
-                <small className="status-label">
+                <small className="status-label transcript-model-label">
                   Model: {assistant?.move_model ?? (selectedProvider === 'ollama' ? stage2Model : 'mock-strategist-v1')}
                 </small>
                 <pre className="mono-panel transcript-panel">
@@ -857,20 +739,45 @@ function App() {
             </div>
 
             <article className="assistant-card transcript-card">
-              <h3>Observation Prompt</h3>
-              <pre className="mono-panel transcript-panel">
-                {assistant?.observation_prompt_preview ??
-                  assistant?.prompt_preview ??
-                  'No observation prompt yet.\n\nRun analysis to inspect the exact stage 1 prompt sent to the model.'}
-              </pre>
+              <div className="prompt-card-header">
+                <h3>Observation Prompt</h3>
+                <button
+                  type="button"
+                  onClick={() => setStage1PromptDraft(promptConfig?.stage1_prompt ?? '')}
+                >
+                  Reset
+                </button>
+              </div>
+              <small className="field-note">
+                Current file: {promptConfig?.stage1_prompt_file ?? 'n/a'}
+              </small>
+              <textarea
+                className="prompt-inline-editor"
+                value={stage1PromptDraft}
+                onChange={(event) => setStage1PromptDraft(event.target.value)}
+                spellCheck={false}
+              />
             </article>
 
             <article className="assistant-card transcript-card">
-              <h3>Move Prompt</h3>
-              <pre className="mono-panel transcript-panel">
-                {assistant?.move_prompt_preview ??
-                  'No move prompt yet.\n\nRun Assistant Move to inspect the exact stage 2 prompt sent to the model.'}
-              </pre>
+              <div className="prompt-card-header">
+                <h3>Move Prompt</h3>
+                <button
+                  type="button"
+                  onClick={() => setStage2PromptDraft(promptConfig?.stage2_prompt ?? '')}
+                >
+                  Reset
+                </button>
+              </div>
+              <small className="field-note">
+                Current file: {promptConfig?.stage2_prompt_file ?? 'n/a'}
+              </small>
+              <textarea
+                className="prompt-inline-editor"
+                value={stage2PromptDraft}
+                onChange={(event) => setStage2PromptDraft(event.target.value)}
+                spellCheck={false}
+              />
             </article>
           </div>
         ) : null}

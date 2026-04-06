@@ -133,10 +133,9 @@ python main.py
 
 ## Observation Modes
 
-The move assistant now supports three observation modes:
+The move assistant now supports two observation modes:
 
 - `Direct State`: the backend prompt receives the board state directly
-- `Synthetic Board Image`: the frontend renders the current board to a PNG snapshot and the Ollama move prompt uses that image instead of the raw board state
 - `Live Camera Frame`: the backend captures the current webcam frame and the Ollama move prompt uses that image instead of the raw board state
 
 The backend still validates the chosen move deterministically in both modes.
