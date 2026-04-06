@@ -7,12 +7,27 @@ type Cell = '' | Player
 type AssistantResponse = {
   provider: string
   model: string
+  observation_model: string | null
+  move_model: string | null
+  debug_dataset: string | null
   current_player: Player
   legal_moves: number[]
-  chosen_move: number
+  interpreted_legal_moves: number[] | null
+  chosen_move: number | null
+  proposed_move: number | null
+  interpreted_board: Cell[] | null
   reasoning_transcript: string
+  observation_reasoning_transcript: string | null
+  move_reasoning_transcript: string | null
   explanation: string
-  confidence: number
+  confidence: number | null
+  validation_status: 'valid' | 'invalid'
+  validation_error: string | null
+  prompt_preview: string | null
+  observation_prompt_preview: string | null
+  move_prompt_preview: string | null
+  debug_image_path: string | null
+  debug_record_path: string | null
 }
 
 type VisionStatus = {
@@ -35,10 +50,22 @@ type ProviderCatalog = {
   providers: ProviderOption[]
 }
 
+type PromptConfig = {
+  stage1_prompt: string
+  stage2_prompt: string
+  stage1_prompt_file: string | null
+  stage2_prompt_file: string | null
+}
+
+type ObservationMode = 'direct_state' | 'rendered_image' | 'camera_frame'
+type GameMode = 'human_vs_human' | 'human_vs_assistant'
+
 type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
 }
+
+const modelOptions = ['gemma4:e4b', 'gemma4:26b', 'qwen3.5:9b']
 
 const winningLines = [
   [0, 1, 2],
@@ -73,21 +100,109 @@ function formatBoard(board: Cell[]) {
   ).join('\n')
 }
 
+function observationModeLabel(mode: ObservationMode) {
+  if (mode === 'rendered_image') {
+    return 'Synthetic board image'
+  }
+  if (mode === 'camera_frame') {
+    return 'Live camera frame'
+  }
+  return 'Direct GUI state'
+}
+
+function describeAssistantModels(response: AssistantResponse) {
+  if (response.move_model) {
+    if (response.observation_model && response.observation_model !== response.move_model) {
+      return `${response.provider}:${response.observation_model} -> ${response.move_model}`
+    }
+    return `${response.provider}:${response.move_model}`
+  }
+  if (response.observation_model) {
+    return `${response.provider}:${response.observation_model}`
+  }
+  return `${response.provider}:${response.model}`
+}
+
 function nextPlayer(board: Cell[]): Player {
   const xCount = board.filter((cell) => cell === 'X').length
   const oCount = board.filter((cell) => cell === 'O').length
   return xCount === oCount ? 'X' : 'O'
 }
 
+function createBoardSnapshot(board: Cell[]): string {
+  const canvas = document.createElement('canvas')
+  const size = 720
+  const padding = 36
+  const gap = 18
+  const cellSize = (size - padding * 2 - gap * 2) / 3
+  canvas.width = size
+  canvas.height = size
+
+  const context = canvas.getContext('2d')
+  if (!context) {
+    throw new Error('Could not create board snapshot canvas.')
+  }
+
+  const gradient = context.createLinearGradient(0, 0, size, size)
+  gradient.addColorStop(0, '#f8f2e8')
+  gradient.addColorStop(1, '#e7dcc8')
+  context.fillStyle = gradient
+  context.fillRect(0, 0, size, size)
+
+  board.forEach((cell, index) => {
+    const row = Math.floor(index / 3)
+    const col = index % 3
+    const x = padding + col * (cellSize + gap)
+    const y = padding + row * (cellSize + gap)
+
+    context.fillStyle = '#fbf7ef'
+    context.strokeStyle = 'rgba(138, 116, 83, 0.16)'
+    context.lineWidth = 4
+    context.beginPath()
+    context.roundRect(x, y, cellSize, cellSize, 28)
+    context.fill()
+    context.stroke()
+
+    if (cell === 'X') {
+      context.strokeStyle = '#c84c35'
+      context.lineWidth = 16
+      context.lineCap = 'round'
+      context.beginPath()
+      context.moveTo(x + 46, y + 46)
+      context.lineTo(x + cellSize - 46, y + cellSize - 46)
+      context.moveTo(x + cellSize - 46, y + 46)
+      context.lineTo(x + 46, y + cellSize - 46)
+      context.stroke()
+    }
+
+    if (cell === 'O') {
+      context.strokeStyle = '#2d7077'
+      context.lineWidth = 16
+      context.beginPath()
+      context.arc(x + cellSize / 2, y + cellSize / 2, cellSize / 2 - 44, 0, Math.PI * 2)
+      context.stroke()
+    }
+  })
+
+  return canvas.toDataURL('image/png').split(',')[1]
+}
+
 function App() {
   const [board, setBoard] = useState<Cell[]>(Array(9).fill(''))
+  const [assistantSourceBoard, setAssistantSourceBoard] = useState<Cell[] | null>(null)
   const [currentPlayer, setCurrentPlayer] = useState<Player>('X')
+  const [gameMode, setGameMode] = useState<GameMode>('human_vs_human')
   const [winner, setWinner] = useState<Player | null>(null)
   const [assistant, setAssistant] = useState<AssistantResponse | null>(null)
   const [vision, setVision] = useState<VisionStatus | null>(null)
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalog | null>(null)
-  const [selectedProvider, setSelectedProvider] = useState<'mock' | 'ollama'>('mock')
-  const [ollamaModel, setOllamaModel] = useState('gemma4:e4b')
+  const [promptConfig, setPromptConfig] = useState<PromptConfig | null>(null)
+  const [selectedProvider, setSelectedProvider] = useState<'mock' | 'ollama'>('ollama')
+  const [stage1Model, setStage1Model] = useState('gemma4:26b')
+  const [stage2Model, setStage2Model] = useState('gemma4:26b')
+  const [stage1PromptDraft, setStage1PromptDraft] = useState('')
+  const [stage2PromptDraft, setStage2PromptDraft] = useState('')
+  const [observationMode, setObservationMode] = useState<ObservationMode>('camera_frame')
   const [streamNonce, setStreamNonce] = useState(0)
   const [assistantTab, setAssistantTab] = useState<'reasoning' | 'chat' | 'logs'>('reasoning')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
@@ -101,7 +216,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [requestingMove, setRequestingMove] = useState(false)
   const [logs, setLogs] = useState<string[]>([
-    'Prototype ready. Human places X on the board. Assistant responds as O.',
+    'Prototype ready. Set up a board state, then analyze the board or run the full two-stage assistant.',
   ])
 
   useEffect(() => {
@@ -137,6 +252,34 @@ function App() {
   useEffect(() => {
     let cancelled = false
 
+    const loadPromptConfig = async () => {
+      try {
+        const response = await fetch('/api/prompt-config')
+        if (!response.ok) {
+          throw new Error(`Prompt config failed with ${response.status}`)
+        }
+        const data = (await response.json()) as PromptConfig
+        if (!cancelled) {
+          setPromptConfig(data)
+          setStage1PromptDraft(data.stage1_prompt)
+          setStage2PromptDraft(data.stage2_prompt)
+        }
+      } catch (fetchError) {
+        if (!cancelled) {
+          setError((fetchError as Error).message)
+        }
+      }
+    }
+
+    loadPromptConfig()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
     const loadProviders = async () => {
       try {
         const response = await fetch('/api/providers')
@@ -149,7 +292,8 @@ function App() {
           setSelectedProvider(data.default_provider)
           const ollama = data.providers.find((provider) => provider.id === 'ollama')
           if (ollama?.default_model) {
-            setOllamaModel(ollama.default_model)
+            setStage1Model(ollama.default_model)
+            setStage2Model(ollama.default_model)
           }
         }
       } catch (fetchError) {
@@ -176,6 +320,7 @@ function App() {
 
   const resetGame = () => {
     setBoard(Array(9).fill(''))
+    setAssistantSourceBoard(null)
     setCurrentPlayer('X')
     setWinner(null)
     setAssistant(null)
@@ -195,49 +340,63 @@ function App() {
   }
 
   const handleCellClick = (index: number) => {
-    if (winner || currentPlayer !== 'X' || board[index] !== '') {
+    if (winner || board[index] !== '') {
+      return
+    }
+
+    if (gameMode === 'human_vs_assistant' && currentPlayer !== 'X') {
       return
     }
 
     const nextBoard = board.slice()
-    nextBoard[index] = 'X'
+    nextBoard[index] = currentPlayer
     applyBoardState(nextBoard)
-    appendLog(`Human placed X at cell ${index}.`)
+    appendLog(`Placed ${currentPlayer} at cell ${index}.`)
+    setAssistantSourceBoard(null)
     setAssistant(null)
     setError(null)
   }
 
-  const handleAssistantMove = async () => {
-    if (winner) {
-      setError('The game is already over.')
-      appendLog('Assistant move skipped because a winner already exists.')
-      return
-    }
-    if (currentPlayer !== 'O') {
-      setError('It is still X turn on the GUI board.')
-      appendLog('Assistant move rejected because the GUI still expects X.')
-      return
-    }
-    if (selectedProvider === 'ollama' && !ollamaModel.trim()) {
-      setError('Choose an Ollama model tag before requesting a move.')
-      appendLog('Assistant move rejected because the Ollama model field is empty.')
-      return
+  const requestAssistant = async (analysisOnly: boolean) => {
+    if (selectedProvider === 'ollama') {
+      if (!stage1Model.trim()) {
+        setError('Choose a stage 1 Ollama model tag before requesting the assistant.')
+        appendLog('Assistant request rejected because the stage 1 model field is empty.')
+        return
+      }
+      if (!analysisOnly && !stage2Model.trim()) {
+        setError('Choose a stage 2 Ollama model tag before requesting the assistant.')
+        appendLog('Assistant request rejected because the stage 2 model field is empty.')
+        return
+      }
     }
 
     setRequestingMove(true)
     setError(null)
 
     try {
+      const sourceBoard = board.slice()
+      setAssistantSourceBoard(sourceBoard)
+      let boardImageBase64: string | undefined
+      if (observationMode === 'rendered_image') {
+        boardImageBase64 = createBoardSnapshot(sourceBoard)
+      }
       const response = await fetch('/api/assistant/move', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          board,
+          board: sourceBoard,
           player: currentPlayer,
           provider: selectedProvider,
-          model: selectedProvider === 'ollama' ? ollamaModel.trim() : undefined,
+          stage1_model: selectedProvider === 'ollama' ? stage1Model.trim() : undefined,
+          stage2_model: selectedProvider === 'ollama' ? stage2Model.trim() : undefined,
+          stage1_prompt_override: selectedProvider === 'ollama' ? stage1PromptDraft : undefined,
+          stage2_prompt_override: selectedProvider === 'ollama' ? stage2PromptDraft : undefined,
+          observation_mode: observationMode,
+          board_image_base64: boardImageBase64,
+          analysis_only: analysisOnly,
         }),
       })
 
@@ -251,15 +410,20 @@ function App() {
       }
 
       const data = payload as AssistantResponse
-      if (!legalMoves(board).includes(data.chosen_move)) {
-        throw new Error(`Backend returned illegal move ${data.chosen_move}.`)
-      }
-
-      const nextBoard = board.slice()
-      nextBoard[data.chosen_move] = 'O'
-      applyBoardState(nextBoard)
       setAssistant(data)
-      appendLog(`Assistant selected cell ${data.chosen_move} using ${data.provider}:${data.model}.`)
+      if (data.validation_status === 'invalid') {
+        setError(data.validation_error ?? 'The board analysis failed validation.')
+        appendLog(`Assistant returned invalid output using ${describeAssistantModels(data)}.`)
+        return
+      }
+      if (!analysisOnly && data.chosen_move !== null) {
+        const nextBoard = sourceBoard.slice()
+        nextBoard[data.chosen_move] = 'O'
+        applyBoardState(nextBoard)
+        appendLog(`Assistant played O at cell ${data.chosen_move} using ${describeAssistantModels(data)}.`)
+      } else {
+        appendLog(`Board analyzed using ${describeAssistantModels(data)} in ${observationMode}.`)
+      }
     } catch (requestError) {
       const message = (requestError as Error).message
       setError(message)
@@ -269,12 +433,20 @@ function App() {
     }
   }
 
+  const handleAnalyzeBoard = async () => {
+    await requestAssistant(true)
+  }
+
+  const handleRunAssistantMove = async () => {
+    await requestAssistant(false)
+  }
+
   const handleSendChat = async () => {
     const trimmed = chatDraft.trim()
     if (!trimmed) {
       return
     }
-    if (selectedProvider === 'ollama' && !ollamaModel.trim()) {
+    if (selectedProvider === 'ollama' && !stage2Model.trim()) {
       setError('Choose an Ollama model tag before sending chat.')
       appendLog('Chat request rejected because the Ollama model field is empty.')
       return
@@ -294,7 +466,7 @@ function App() {
         },
         body: JSON.stringify({
           provider: selectedProvider,
-          model: selectedProvider === 'ollama' ? ollamaModel.trim() : undefined,
+          model: selectedProvider === 'ollama' ? stage2Model.trim() : undefined,
           messages: nextMessages,
         }),
       })
@@ -352,23 +524,28 @@ function App() {
   }
 
   const boardFull = legalMoves(board).length === 0
+  const canRunAssistantMove =
+    gameMode === 'human_vs_assistant' &&
+    currentPlayer === 'O' &&
+    !winner &&
+    !boardFull &&
+    !requestingMove
   const statusText = winner
     ? `Winner: ${winner}`
     : boardFull
       ? 'Draw'
       : `Turn: ${currentPlayer}`
-  const ollamaOption = providerCatalog?.providers.find((provider) => provider.id === 'ollama')
 
   return (
     <main className="app-shell">
       <section className="hero-bar">
         <div>
-          <p className="eyebrow">Robot Tic-Tac-Toe Lab</p>
-          <h1>Observed Input + Visible Reasoning</h1>
+          <p className="eyebrow">Robot Tic-Tac-Toe</p>
+          <h1>Vision-Guided Decision Pipeline</h1>
         </div>
         <div className="hero-pills">
           <span className="pill">{statusText}</span>
-          <span className="pill">Source: GUI board</span>
+          <span className="pill">Observation: {observationModeLabel(observationMode)}</span>
           <span className="pill">Camera: {vision?.active_source === 'camera' ? 'live' : 'synthetic'}</span>
         </div>
       </section>
@@ -378,26 +555,38 @@ function App() {
           <div className="panel-header">
             <div>
               <p className="panel-kicker">Interactive Board</p>
-              <h2>GUI-first Game State</h2>
+              <h2>Game State</h2>
             </div>
             <div className="button-row">
               <button type="button" onClick={resetGame}>
                 New Game
               </button>
-              <button type="button" onClick={handleAssistantMove} disabled={requestingMove}>
-                {requestingMove ? 'Thinking...' : 'Run Assistant Move'}
+              <button type="button" onClick={handleAnalyzeBoard} disabled={requestingMove}>
+                {requestingMove ? 'Working...' : 'Analyze Board'}
+              </button>
+              <button type="button" onClick={handleRunAssistantMove} disabled={!canRunAssistantMove}>
+                {requestingMove ? 'Working...' : 'Run Assistant Move'}
               </button>
             </div>
           </div>
 
           <div className="status-strip">
-            <div className="status-card">
-              <span className="status-label">Operator mode</span>
-              <strong>Human X vs Assistant O</strong>
+            <div className="status-card board-status-card">
+              <span className="status-label">Operator Mode</span>
+              <select
+                value={gameMode}
+                onChange={(event) => {
+                  setGameMode(event.target.value as GameMode)
+                  resetGame()
+                }}
+              >
+                <option value="human_vs_human">Human vs Human</option>
+                <option value="human_vs_assistant">Human X vs Assistant O</option>
+              </select>
             </div>
-            <div className="status-card">
+            <div className="status-card board-status-card">
               <span className="status-label">Observed board</span>
-              <strong>Direct GUI state</strong>
+              <strong>{observationModeLabel(observationMode)}</strong>
             </div>
           </div>
 
@@ -428,19 +617,22 @@ function App() {
           </div>
 
           <div className="camera-frame">
-            <img src={`/vision/stream?source=auto&v=${streamNonce}`} alt="Observed input stream" />
-            <div className="camera-overlay">
-              <span>Preview only</span>
-              <span>{vision?.note ?? 'Waiting for backend vision status.'}</span>
+            <div className="camera-hud-brackets" />
+            <div className="camera-hud-bottom" />
+            <div className="camera-scanline" />
+            <div className="camera-live-badge">
+              <div className="badge-dot" />
+              <span className="badge-text">Vision System Active</span>
             </div>
+            <img src={`/vision/stream?source=auto&v=${streamNonce}`} alt="Observed input stream" />
           </div>
 
           <div className="status-strip">
-            <div className="status-card">
+            <div className="status-card camera-status-card">
               <span className="status-label">Current source</span>
               <strong>{vision?.active_source ?? 'unknown'}</strong>
             </div>
-            <div className="status-card camera-switch-card">
+            <div className="status-card camera-switch-card camera-status-card">
               <span className="status-label">Camera index</span>
               <div className="camera-switch-controls">
                 <button type="button" onClick={() => updateCameraIndex((vision?.camera_index ?? 0) - 1)}>
@@ -452,19 +644,15 @@ function App() {
                 </button>
               </div>
             </div>
-            <div className="status-card">
-              <span className="status-label">Later role</span>
-              <strong>Physical board observation</strong>
-            </div>
           </div>
         </article>
       </section>
 
       <section className="panel assistant-panel">
-        <div className="panel-header">
+        <div className="panel-header assistant-header">
           <div>
             <p className="panel-kicker">Assistant</p>
-            <h2>Structured Move + Demo Transcript</h2>
+            <h2>Two-Stage AI Reasoning</h2>
           </div>
           <div className="provider-controls">
             <label className="provider-field">
@@ -485,36 +673,99 @@ function App() {
               </select>
             </label>
             <label className="provider-field">
-              <span className="status-label">Ollama Model</span>
-              <input
-                type="text"
-                value={ollamaModel}
-                onChange={(event) => setOllamaModel(event.target.value)}
+              <span className="status-label">Stage 1 Model</span>
+              <select
+                value={stage1Model}
+                onChange={(event) => setStage1Model(event.target.value)}
                 disabled={selectedProvider !== 'ollama'}
-                placeholder="gemma4:e4b"
-              />
+              >
+                {modelOptions.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+              <small className="field-note">Observation model for board interpretation.</small>
+            </label>
+            <label className="provider-field">
+              <span className="status-label">Stage 2 Model</span>
+              <select
+                value={stage2Model}
+                onChange={(event) => setStage2Model(event.target.value)}
+                disabled={selectedProvider !== 'ollama'}
+              >
+                {modelOptions.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+              <small className="field-note">Move model for legal O-move reasoning. Chat also uses this model.</small>
+            </label>
+            <label className="provider-field">
+              <span className="status-label">Observation Mode</span>
+              <select
+                value={observationMode}
+                onChange={(event) => setObservationMode(event.target.value as ObservationMode)}
+              >
+                <option value="direct_state">Direct State</option>
+                <option value="rendered_image">Synthetic Board Image</option>
+                <option value="camera_frame">Live Camera Frame</option>
+              </select>
             </label>
           </div>
         </div>
 
-        <div className="status-strip">
-          <div className="status-card">
-            <span className="status-label">Selected provider</span>
-            <strong>{selectedProvider}</strong>
+        <details className="prompt-editor">
+          <summary>Prompt Overrides</summary>
+          <div className="prompt-editor-grid">
+            <article className="prompt-editor-card">
+              <div className="prompt-editor-header">
+                <div>
+                  <span className="status-label">Stage 1 Prompt</span>
+                  <strong>Observation Prompt Override</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStage1PromptDraft(promptConfig?.stage1_prompt ?? '')}
+                >
+                  Reset
+                </button>
+              </div>
+              <small className="field-note">
+                Current file: {promptConfig?.stage1_prompt_file ?? 'n/a'}
+              </small>
+              <textarea
+                value={stage1PromptDraft}
+                onChange={(event) => setStage1PromptDraft(event.target.value)}
+                spellCheck={false}
+              />
+            </article>
+
+            <article className="prompt-editor-card">
+              <div className="prompt-editor-header">
+                <div>
+                  <span className="status-label">Stage 2 Prompt</span>
+                  <strong>Move Prompt Override</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStage2PromptDraft(promptConfig?.stage2_prompt ?? '')}
+                >
+                  Reset
+                </button>
+              </div>
+              <small className="field-note">
+                Current file: {promptConfig?.stage2_prompt_file ?? 'n/a'}
+              </small>
+              <textarea
+                value={stage2PromptDraft}
+                onChange={(event) => setStage2PromptDraft(event.target.value)}
+                spellCheck={false}
+              />
+            </article>
           </div>
-          <div className="status-card">
-            <span className="status-label">Model</span>
-            <strong>{assistant?.model ?? (selectedProvider === 'ollama' ? ollamaModel : 'mock-strategist-v1')}</strong>
-          </div>
-          <div className="status-card provider-note">
-            <span className="status-label">Provider note</span>
-            <strong>
-              {selectedProvider === 'ollama'
-                ? ollamaOption?.note ?? 'Ollama provider status unavailable.'
-                : 'Mock provider is always available for UI testing.'}
-            </strong>
-          </div>
-        </div>
+        </details>
 
         <div className="assistant-tabs">
           <button
@@ -542,25 +793,83 @@ function App() {
 
         {assistantTab === 'reasoning' ? (
           <div className="assistant-grid">
-            <article className="assistant-card">
-              <h3>Observed Board</h3>
-              <pre className="mono-panel">{formatBoard(board)}</pre>
-            </article>
+            <div className="reasoning-top-row">
+              <article className="assistant-card compact-card">
+                <h3>Source Board</h3>
+                <pre className="mono-panel compact-panel">
+                  {assistantSourceBoard
+                    ? formatBoard(assistantSourceBoard)
+                    : 'No analysis request yet.\n\nSet up the board, then run analysis to capture the observed source board.'}
+                </pre>
+              </article>
 
-            <article className="assistant-card">
-              <h3>Chosen Move</h3>
-              <div className="move-card">
-                <span className="move-index">{assistant?.chosen_move ?? '-'}</span>
-                <p>{assistant?.explanation ?? 'No assistant move requested yet.'}</p>
-                <small>Confidence {assistant ? assistant.confidence.toFixed(2) : '--'}</small>
-              </div>
+              <article className="assistant-card compact-card">
+                <h3>Interpreted Board</h3>
+                <pre className="mono-panel compact-panel">
+                  {assistant?.interpreted_board
+                    ? formatBoard(assistant.interpreted_board)
+                    : 'No interpreted board yet.\n\nRun analysis to see how the selected provider reads the position.'}
+                </pre>
+              </article>
+
+              <article className="assistant-card compact-card">
+                <h3>Move Output</h3>
+                <div className="move-card">
+                  <span className={`move-index ${assistant?.validation_status === 'invalid' ? 'move-index-invalid' : ''}`.trim()}>
+                    {assistant?.chosen_move ?? assistant?.proposed_move ?? '-'}
+                  </span>
+                  <p>{assistant?.explanation ?? 'No analysis requested yet.'}</p>
+                  {assistant?.interpreted_legal_moves?.length ? (
+                    <small>Interpreted legal moves: {assistant.interpreted_legal_moves.join(', ')}</small>
+                  ) : null}
+                  {assistant?.validation_status === 'invalid' ? (
+                    <small className="validation-warning">
+                      Rejected: {assistant.validation_error}
+                    </small>
+                  ) : null}
+                </div>
+              </article>
+            </div>
+
+            <article className="assistant-card transcript-card">
+              <h3>Observation Reasoning</h3>
+              <small className="status-label">
+                Model: {assistant?.observation_model ?? (selectedProvider === 'ollama' ? stage1Model : 'mock-strategist-v1')}
+              </small>
+              <pre className="mono-panel transcript-panel">
+                {assistant?.observation_reasoning_transcript ??
+                  assistant?.reasoning_transcript ??
+                  'No observation transcript yet.\n\nRun analysis or a full assistant move to inspect how the model interpreted the board.'}
+              </pre>
             </article>
 
             <article className="assistant-card transcript-card">
-              <h3>Reasoning Transcript</h3>
+              <h3>Move Reasoning</h3>
+              <small className="status-label">
+                Model: {assistant?.move_model ?? (selectedProvider === 'ollama' ? stage2Model : 'mock-strategist-v1')}
+              </small>
               <pre className="mono-panel transcript-panel">
-                {assistant?.reasoning_transcript ??
-                  'No reasoning transcript yet.\n\nPlace X on the board, then request the assistant move.'}
+                {assistant?.move_reasoning_transcript ??
+                  (assistant?.chosen_move != null
+                    ? assistant.reasoning_transcript
+                    : 'No move reasoning yet.\n\nRun Assistant Move to see the second-stage move transcript.')}
+              </pre>
+            </article>
+
+            <article className="assistant-card transcript-card">
+              <h3>Observation Prompt</h3>
+              <pre className="mono-panel transcript-panel">
+                {assistant?.observation_prompt_preview ??
+                  assistant?.prompt_preview ??
+                  'No observation prompt yet.\n\nRun analysis to inspect the exact stage 1 prompt sent to the model.'}
+              </pre>
+            </article>
+
+            <article className="assistant-card transcript-card">
+              <h3>Move Prompt</h3>
+              <pre className="mono-panel transcript-panel">
+                {assistant?.move_prompt_preview ??
+                  'No move prompt yet.\n\nRun Assistant Move to inspect the exact stage 2 prompt sent to the model.'}
               </pre>
             </article>
           </div>
@@ -583,6 +892,12 @@ function App() {
               <textarea
                 value={chatDraft}
                 onChange={(event) => setChatDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault()
+                    void handleSendChat()
+                  }
+                }}
                 placeholder="Ask the assistant about the board, the camera, or the demo setup."
                 rows={4}
               />

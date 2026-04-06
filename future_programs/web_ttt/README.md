@@ -82,11 +82,7 @@ The current implementation now has a real split stack:
 - synthetic or live camera preview served by the backend
 - assistant endpoint supporting both `mock` and `ollama` providers
 - separate chat endpoint supporting both `mock` and `ollama` providers
-
-The original static prototype is still present as a fallback reference:
-
-- `serve.py`
-- `web/`
+- move requests can use direct GUI state, a synthetic board image, or the live camera frame as the observation source
 
 ## Running The Current App
 
@@ -135,9 +131,223 @@ python main.py
 
 - If Ollama is not reachable, the UI still works with the `mock` provider.
 
+## Observation Modes
+
+The move assistant now supports three observation modes:
+
+- `Direct State`: the backend prompt receives the board state directly
+- `Synthetic Board Image`: the frontend renders the current board to a PNG snapshot and the Ollama move prompt uses that image instead of the raw board state
+- `Live Camera Frame`: the backend captures the current webcam frame and the Ollama move prompt uses that image instead of the raw board state
+
+The backend still validates the chosen move deterministically in both modes.
+
+## Model Comparison
+
+The frontend exposes separate stage 1 and stage 2 Ollama model fields for side-by-side manual comparison.
+
+Current quick presets:
+
+- `gemma4:e4b`
+- `gemma4:26b`
+- `qwen3.5:9b`
+
+Stage 1 is the observation model.
+Stage 2 is the move-reasoning model.
+
+## Dataset Organization
+
+Recommended layout:
+
+```text
+debug_images/
+  test_prompts/
+  datasets/
+    paper_mockup_v1/
+      records/
+      replays/
+    real_board_lab_a/
+      records/
+      replays/
+```
+
+Use one dataset folder per camera/board/lighting setup.
+This keeps benchmark sets stable instead of mixing all captures into one flat folder.
+
+For live backend captures, set:
+
+```powershell
+$env:WEB_TTT_DEBUG_DATASET='paper_mockup_v1'
+```
+
+Then start the backend normally. New images and records will be saved into:
+
+```text
+debug_images/datasets/paper_mockup_v1/records/
+```
+
 ## Camera Notes
 
 - If OpenCV can open a camera, the GUI will show a live preview.
 - If no camera is available, the backend serves a synthetic fallback stream so the layout still works.
 - The current move logic still uses the GUI board state, not camera perception.
 - The GUI can now switch camera index dynamically if Windows maps the phone camera to index `0` and the webcam to another index such as `1`.
+
+## Replay Harness
+
+The project includes a replay tool for evaluating models against saved debug images:
+
+- script: `future_programs/web_ttt/tools/replay_debug_images.py`
+- input dataset: `debug_images/*.json` plus linked image files
+- output folder:
+  - flat mode: `debug_images/replays/replay_YYYYMMDD_HHMMSS`
+  - dataset mode: `debug_images/datasets/<dataset>/replays/replay_YYYYMMDD_HHMMSS`
+
+Each replay output contains:
+
+- per-record result JSON files
+- `summary.json`
+- `summary.csv`
+- `run_config.json`
+- `prompt_used.txt` when a custom prompt file is provided
+
+### Replay Parameters
+
+`replay_debug_images.py` supports:
+
+- `--debug-dir` path to debug records (default is workspace `debug_images`)
+- `--dataset` dataset name under `debug_images/datasets/<dataset>/records`
+- `--prompt-file` custom prompt template file
+- `--model` Ollama model override (otherwise uses model saved in each record)
+- `--ollama-url` Ollama base URL
+- `--limit` latest N records, `0` means all
+- `--record` specific debug record filename (repeatable)
+- `--pattern` filename substring filter
+- `--timeout-seconds` read timeout per request
+- `--retries` retries per record after the first attempt
+- `--num-predict` optional max output tokens; omit to match live GUI behavior
+- `--temperature` sampling temperature
+
+### Prompt Template Placeholders
+
+When using `--prompt-file`, these placeholders are available:
+
+- `{player}`
+- `{source_board_rows}`
+- `{source_board_list}`
+- `{legal_moves}`
+- `{observation_mode}`
+
+### Copy-Paste Replay Examples
+
+Replay latest 8 records with the model stored in each record:
+
+```powershell
+python future_programs\web_ttt\tools\replay_debug_images.py --limit 8 --timeout-seconds 45 --retries 0
+```
+
+Replay the latest 8 records from a named dataset:
+
+```powershell
+python future_programs\web_ttt\tools\replay_debug_images.py --dataset paper_mockup_v1 --limit 8 --timeout-seconds 45 --retries 0
+```
+
+Replay latest 8 with an explicit model:
+
+```powershell
+python future_programs\web_ttt\tools\replay_debug_images.py --limit 8 --model gemma4:26b --timeout-seconds 45 --retries 0
+```
+
+Replay latest 8 with a custom prompt:
+
+```powershell
+python future_programs\web_ttt\tools\replay_debug_images.py --limit 8 --model gemma4:26b --prompt-file C:\Users\rasmu\Documents\0_CODING\ristinolla_ai\debug_images\test_prompts\camera_board_analysis_v8.txt --timeout-seconds 45 --retries 0
+```
+
+Replay one specific record:
+
+```powershell
+python future_programs\web_ttt\tools\replay_debug_images.py --record web_ttt_20260405_205823_927_camera_frame_analysis.json --model gemma4:26b --timeout-seconds 45 --retries 0
+```
+
+Replay records filtered by filename pattern:
+
+```powershell
+python future_programs\web_ttt\tools\replay_debug_images.py --pattern 2059 --model gemma4:26b --timeout-seconds 45 --retries 0
+```
+
+## Two-Stage Pipeline Replay
+
+The project also includes a two-stage replay tool:
+
+- script: `future_programs/web_ttt/tools/replay_two_stage_pipeline.py`
+- stage 1: image -> `interpreted_board`
+- stage 2: `interpreted_board` -> legal O move
+- output folder:
+  - flat mode: `debug_images/replays/pipeline_replay_YYYYMMDD_HHMMSS`
+  - dataset mode: `debug_images/datasets/<dataset>/replays/pipeline_replay_YYYYMMDD_HHMMSS`
+
+This is the preferred offline workflow for debugging the full LLM demo chain without touching the live GUI.
+
+Each pipeline replay record stores:
+
+- source image and source board
+- stage 1 prompt, interpreted board, transcript, mismatch info, token usage
+- stage 2 prompt, chosen move, transcript, legality checks, token usage
+- overall pipeline status and total duration
+
+### Two-Stage Prompt Files
+
+Default prompt files:
+
+- stage 1: `debug_images/test_prompts/camera_board_analysis_v8.txt`
+- stage 2: `debug_images/test_prompts/move_reasoning_v1.txt`
+
+Stage 2 assumes the assistant always plays `O`.
+The pipeline replay is image-based. If the debug folder contains direct-state records with no saved image, they are skipped automatically.
+The live web GUI can override both prompts temporarily. `Reset` returns the text areas to these current file-based defaults.
+
+### Two-Stage Copy-Paste Example
+
+Run the full two-stage pipeline on the latest 8 records using `gemma4:26b` for both stages:
+
+```powershell
+python future_programs\web_ttt\tools\replay_two_stage_pipeline.py --limit 8 --stage1-model gemma4:26b --stage2-model gemma4:26b --timeout-seconds 45
+```
+
+Run the same pipeline on a named dataset:
+
+```powershell
+python future_programs\web_ttt\tools\replay_two_stage_pipeline.py --dataset paper_mockup_v1 --limit 8 --stage1-model gemma4:26b --stage2-model gemma4:26b --timeout-seconds 45
+```
+
+Run the full two-stage pipeline with different models for the two stages:
+
+```powershell
+python future_programs\web_ttt\tools\replay_two_stage_pipeline.py --limit 8 --stage1-model gemma4:26b --stage2-model gemma4:e4b --timeout-seconds 45
+```
+
+Run the full two-stage pipeline with a different stage 2 prompt:
+
+```powershell
+python future_programs\web_ttt\tools\replay_two_stage_pipeline.py --limit 8 --stage1-model gemma4:26b --stage2-model gemma4:26b --stage2-prompt-file C:\Users\rasmu\Documents\0_CODING\ristinolla_ai\debug_images\test_prompts\move_reasoning_v2.txt --timeout-seconds 45
+```
+
+Run the pipeline for one specific record:
+
+```powershell
+python future_programs\web_ttt\tools\replay_two_stage_pipeline.py --record web_ttt_20260405_205823_927_camera_frame_analysis.json --stage1-model gemma4:26b --stage2-model gemma4:26b --timeout-seconds 45
+```
+
+## Replay Comparison
+
+The project also includes a comparison tool for two pipeline replay folders:
+
+- script: `future_programs/web_ttt/tools/compare_pipeline_replays.py`
+- input: two `pipeline_replay_*` folders
+- output: `comparison.json` and `comparison.csv`
+
+Copy-paste example:
+
+```powershell
+python future_programs\web_ttt\tools\compare_pipeline_replays.py --left C:\Users\rasmu\Documents\0_CODING\ristinolla_ai\debug_images\replays\pipeline_replay_20260406_181241 --right C:\Users\rasmu\Documents\0_CODING\ristinolla_ai\debug_images\replays\pipeline_replay_20260406_183015
+```

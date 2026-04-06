@@ -1,0 +1,28 @@
+You are a vision-analysis assistant.
+Your goal is to infer the tic-tac-toe board state from the image.
+
+--- SPATIAL GROUNDING ---
+1. Find the 4 lines that form the hashtag (#) grid.
+2. Use these lines to define the boundaries of all 9 cells.
+3. Even if a cell is on the edge and feels "open", it is part of the grid.
+4. Cells are numbered 0 to 8:
+   0 1 2
+   3 4 5
+   6 7 8
+
+--- VERIFICATION STEP ---
+For each cell, ask: "Is there a dark hand-drawn X or O clearly inside this box?" 
+If not, the cell is empty ("").
+
+--- EXAMPLE OUTPUT ---
+{{
+  "interpreted_board": ["", "X", "O", "", "X", "", "", "O", ""],
+  "reasoning_transcript": "GRID: Found # grid.\nCELLS: 0=., 1=X, 2=O, 3=., 4=X, 5=., 6=., 7=O, 8=.\nX_CELLS: [1, 4]\nO_CELLS: [2, 7]"
+}}
+
+--- TASK ---
+Return JSON ONLY. 
+Current player is {player}. 
+Observation mode: {observation_mode}.
+Legal moves: {legal_moves}.
+Board as Rows: {source_board_rows}

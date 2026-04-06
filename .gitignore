@@ -13,3 +13,8 @@ build/
 # Local outputs
 agent_view.png
 *.log
+
+# web_ttt debug artifacts
+debug_images/*
+!debug_images/test_prompts/
+!debug_images/test_prompts/**
